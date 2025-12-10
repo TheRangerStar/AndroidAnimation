@@ -10,9 +10,11 @@
 
 *   **高性能渲染**: 采用批量绘制 (Batch Rendering) 和视锥剔除 (Frustum Culling) 技术，支持数万个粒子流畅运行 (60FPS)。
 *   **多样的数学模型**: 内置多种经典的混沌吸引子和几何结构。
+*   **特殊渲染模式**: 支持加性混合 (Additive Blending) 实现发光效果，以及贝塞尔曲线 (Path) 实现波浪效果。
 *   **完全交互式体验**: 支持单指拖动旋转 (3D Rotation) 和双指捏合缩放 (Pinch to Zoom)。
-*   **高度个性化定制**: 用户可以实时调节粒子数量、运动速度、粒子颜色 (HSV 色轮)、粒子大小等参数。
+*   **高度个性化定制**: 用户可以实时调节粒子数量/水位高度、运动速度、粒子颜色 (HSV 色轮)、粒子大小等参数。
 *   **数据持久化**: 自动保存每个动画的个性化设置，下次打开即恢复最佳状态。
+*   **现代 UI 设计**: 沉浸式透明标题栏，简洁的设置面板。
 
 ## 🎨 包含的动画 (Animations)
 
@@ -29,13 +31,22 @@
 5.  **Fibonacci Sphere (斐波那契球体)**
     *   基于斐波那契格点的均匀球面分布，展现数学的和谐之美。
 6.  **Nebula Cloud (星云)**
-    *   模拟宇宙星系的螺旋结构，粒子呈盘状分布并动态旋转。
+    *   **新特性**: 模拟宇宙星系的螺旋结构。
+    *   采用 **加性混合 (Additive Blending)** 渲染技术，模拟恒星核心的炽热发光效果。
+    *   基于物理的引力与轨道模拟，展现动态的星系演化。
+7.  **Water Ripple (水波纹)**
+    *   **新特性**: 动态正弦波进度条动画。
+    *   双层波浪叠加，模拟水的流动与深度感。
+    *   支持通过滑块调节“水位高度”，可作为创意的进度展示组件。
 
 ## 🛠 技术栈 (Tech Stack)
 
 *   **语言**: Kotlin
 *   **UI 框架**: Jetpack Compose
-*   **图形绘制**: Android Canvas API (Native Canvas drawPoints)
+*   **图形绘制**: 
+    *   Android Canvas API (Native Canvas drawPoints)
+    *   Path API (Cubic Bezier / Sine Waves)
+    *   PorterDuff Xfermode (Blend Modes)
 *   **架构**: MVVM (Model-View-ViewModel)
 *   **本地存储**: Room Database
 *   **异步处理**: Kotlin Coroutines

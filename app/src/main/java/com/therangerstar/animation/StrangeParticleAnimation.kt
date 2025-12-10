@@ -40,11 +40,8 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
-import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.drawscope.*
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontWeight
@@ -57,6 +54,9 @@ import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.random.Random
+
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 
 // 粒子数据类
 class Particle(
@@ -73,7 +73,8 @@ enum class AttractorType(val title: String) {
     HALVORSEN("Halvorsen Attractor"),
     SPROTT_B("Sprott B Attractor"),
     FIBONACCI_SPHERE("Fibonacci Sphere"),
-    NEBULA("Nebula Cloud")
+    NEBULA("Nebula Cloud"),
+    RIPPLE("Water Ripple")
 }
 
 @Composable
@@ -199,7 +200,7 @@ fun StrangeParticleAnimation(
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
     isInteractive: Boolean = true,
-    particleCount: Int = 8000,
+    particleCount: Int = 30000,
     onBack: () -> Unit = {},
     overrideHue: Float? = null,
     overrideSaturation: Float? = null,
@@ -252,12 +253,28 @@ fun StrangeParticleAnimation(
     // 使用 remember(attractor, currentParticleCount) 确保切换时重新初始化
     // 优化：使用 FloatArray 而不是 Array<Particle> 对象，减少对象开销
     val particleData = remember(attractor, currentParticleCount) {
-        val data = FloatArray(currentParticleCount * 4) // x, y, z, unused
+        val stride = if (attractor == AttractorType.NEBULA) 6 else 4 // Nebula needs vx, vy (we map to z for 2D sim plane but store as 3D)
+        val data = FloatArray(currentParticleCount * stride) 
         for (i in 0 until currentParticleCount) {
             val p = spawnParticle(attractor, i, currentParticleCount)
-            data[i * 4] = p.x
-            data[i * 4 + 1] = p.y
-            data[i * 4 + 2] = p.z
+            data[i * stride] = p.x
+            data[i * stride + 1] = p.y
+            data[i * stride + 2] = p.z
+            // Nebula initial velocities are handled in spawnParticle but mapped here if we used Particle class
+            // But since we use spawnParticle returning Particle, we need to extract velocity or calculate it.
+            // For Nebula, let's just initialize directly in the loop below if needed, or update spawnParticle to return velocity too?
+            // Particle class is simple. Let's handle Nebula init specifically here for velocity.
+            if (attractor == AttractorType.NEBULA) {
+                 // Re-calculate init for Nebula to set velocity
+                 val r = kotlin.math.sqrt(p.x * p.x + p.z * p.z)
+                 val v = 50f / kotlin.math.sqrt(r + 1f) // Orbital velocity approximation
+                 val angle = atan2(p.z, p.x)
+                 
+                 // Tangential velocity
+                 data[i * stride + 3] = -kotlin.math.sin(angle) * v // vx
+                 data[i * stride + 4] = 0f // vy (height velocity, small noise)
+                 data[i * stride + 5] = kotlin.math.cos(angle) * v // vz
+            }
         }
         data
     }
@@ -267,6 +284,7 @@ fun StrangeParticleAnimation(
     
     // 动画帧触发器
     var trigger by remember { mutableStateOf(0L) }
+    var time by remember { mutableFloatStateOf(0f) }
     
     // 动画循环
     LaunchedEffect(particleData, speedMultiplier) {
@@ -281,8 +299,10 @@ fun StrangeParticleAnimation(
             val baseDt = if (attractor == AttractorType.HALVORSEN) 0.005f else 0.015f
             val dt = baseDt * speedMultiplier
             
+            time += dt
+            
             // 批量更新，避免对象创建
-            updateParticles(particleData, currentParticleCount, attractor, dt)
+            updateParticles(particleData, currentParticleCount, attractor, dt, time)
         }
     }
 
@@ -363,7 +383,8 @@ fun StrangeParticleAnimation(
                 AttractorType.HALVORSEN -> 15f
                 AttractorType.SPROTT_B -> 60f
                 AttractorType.FIBONACCI_SPHERE -> 2.5f
-                AttractorType.NEBULA -> 2.0f
+                AttractorType.NEBULA -> 4.0f
+                AttractorType.RIPPLE -> 8.0f
             }
             
             // 最终缩放
@@ -382,45 +403,142 @@ fun StrangeParticleAnimation(
             var validPointsCount = 0
             val pointSize = if(attractor == AttractorType.AIZAWA) particleSize * 0.75f else particleSize
             
-            for (i in 0 until currentParticleCount) {
-                val idx = i * 4
-                val x = particleData[idx]
-                val y = particleData[idx + 1]
-                val z = particleData[idx + 2]
-                
-                // 1. 旋转变换
-                val y1 = y * cosX - z * sinX
-                val z1 = y * sinX + z * cosX
-                
-                val x2 = x * cosY + z1 * sinY
-                val z2 = -x * sinY + z1 * cosY
-                val y2 = y1
+            // Special Rendering based on Type
+            when (attractor) {
+                AttractorType.RIPPLE -> {
+                    // Water Ripple Progress Bar
+                    // Use particle count slider as progress control (0% to 100%)
+                    val progress = (currentParticleCount - 1000f) / (30000f - 1000f)
+                    val waterLevel = size.height * (1f - progress.coerceIn(0f, 1f))
 
-                // 2. 投影
-                val focalLength = 1000f
-                val depth = z2 + 100f 
-                // val perspective = if (depth > 0) focalLength / (focalLength + z2) else 1f
+                    // 1. Back Wave (Lighter/Faster)
+                    val wavePath2 = Path()
+                    wavePath2.moveTo(0f, size.height.toFloat())
+                    wavePath2.lineTo(0f, waterLevel)
+                    
+                    val waveAmp2 = 12.dp.toPx()
+                    val waveFreq2 = 0.015f
+                    val phase2 = time * 4f + 2f
+                    
+                    for (x in 0..size.width step 10) {
+                        val y = waterLevel + kotlin.math.sin(x * waveFreq2 + phase2) * waveAmp2
+                        wavePath2.lineTo(x.toFloat(), y)
+                    }
+                    wavePath2.lineTo(size.width.toFloat(), size.height.toFloat())
+                    wavePath2.lineTo(0f, size.height.toFloat())
+                    wavePath2.close()
+                    
+                    drawPath(
+                        path = wavePath2,
+                        color = color.copy(alpha = 0.4f)
+                    )
+
+                    // 2. Front Wave (Main Color)
+                    val wavePath = Path()
+                    wavePath.moveTo(0f, size.height.toFloat())
+                    wavePath.lineTo(0f, waterLevel)
+                    
+                    val waveAmp = 15.dp.toPx()
+                    val waveFreq = 0.01f
+                    val phase = time * 3f
+                    
+                    for (x in 0..size.width step 10) {
+                        val y = waterLevel + kotlin.math.sin(x * waveFreq + phase) * waveAmp
+                        wavePath.lineTo(x.toFloat(), y)
+                    }
+                    
+                    wavePath.lineTo(size.width.toFloat(), size.height.toFloat())
+                    wavePath.lineTo(0f, size.height.toFloat())
+                    wavePath.close()
+                    
+                    drawPath(
+                        path = wavePath,
+                        color = color.copy(alpha = 0.8f)
+                    )
+                }
+                AttractorType.NEBULA -> {
+                     validPointsCount = 0
+                     // Draw all particles with Additive Blending for "Glowing" effect
+                     for (i in 0 until currentParticleCount) {
+                     val idx = i * 6 // Nebula stride is 6
+                     val x = particleData[idx]
+                     val y = particleData[idx + 1]
+                     val z = particleData[idx + 2]
+                     
+                     // Rotate & Project
+                     val y1 = y * cosX - z * sinX
+                     val z1 = y * sinX + z * cosX
+                     val x2 = x * cosY + z1 * sinY
+                     val z2 = -x * sinY + z1 * cosY
+                     val y2 = y1
+                     val screenX = x2 * scale + centerX
+                     val screenY = y2 * scale + centerY
+                     
+                     if (screenX >= 0 && screenX <= size.width && screenY >= 0 && screenY <= size.height) {
+                         screenPoints[validPointsCount * 2] = screenX
+                         screenPoints[validPointsCount * 2 + 1] = screenY
+                         validPointsCount++
+                     }
+                 }
+                 
+                 drawIntoCanvas { canvas ->
+                     val paint = Paint().apply {
+                         // Use user selected color with transparency for glow
+                         val argb = color.toArgb()
+                         val r = android.graphics.Color.red(argb)
+                         val g = android.graphics.Color.green(argb)
+                         val b = android.graphics.Color.blue(argb)
+                         this.color = android.graphics.Color.argb(100, r, g, b)
+                         
+                         this.strokeWidth = pointSize * 2.5f // Slightly larger for glow overlap
+                         this.strokeCap = Paint.Cap.ROUND
+                         this.isAntiAlias = true
+                         // Key: Additive Blending
+                         this.xfermode = PorterDuffXfermode(PorterDuff.Mode.ADD)
+                     }
+                     canvas.nativeCanvas.drawPoints(screenPoints, 0, validPointsCount * 2, paint)
+                 }
                 
-                val screenX = x2 * scale + centerX
-                val screenY = y2 * scale + centerY
+            }
+                else -> {
+                // Standard Single-Pass Rendering for other attractors
+                for (i in 0 until currentParticleCount) {
+                    val idx = i * 4
+                    val x = particleData[idx]
+                    val y = particleData[idx + 1]
+                    val z = particleData[idx + 2]
+                    
+                    // 1. 旋转变换
+                    val y1 = y * cosX - z * sinX
+                    val z1 = y * sinX + z * cosX
+                    
+                    val x2 = x * cosY + z1 * sinY
+                    val z2 = -x * sinY + z1 * cosY
+                    val y2 = y1
+    
+                    // 2. 投影
+                    val screenX = x2 * scale + centerX
+                    val screenY = y2 * scale + centerY
+                    
+                    // 简单的视锥剔除
+                    if (screenX >= 0 && screenX <= size.width && screenY >= 0 && screenY <= size.height) {
+                        screenPoints[validPointsCount * 2] = screenX
+                        screenPoints[validPointsCount * 2 + 1] = screenY
+                        validPointsCount++
+                    }
+                }
                 
-                // 简单的视锥剔除
-                if (screenX >= 0 && screenX <= size.width && screenY >= 0 && screenY <= size.height) {
-                    screenPoints[validPointsCount * 2] = screenX
-                    screenPoints[validPointsCount * 2 + 1] = screenY
-                    validPointsCount++
+                // 使用 nativeCanvas 批量绘制点，大幅提升性能并减少 GPU 命令数量
+                drawIntoCanvas { canvas ->
+                    val paint = Paint().apply {
+                        this.color = color.toArgb()
+                        this.strokeWidth = pointSize * 2 // Stroke width is diameter
+                        this.strokeCap = Paint.Cap.ROUND
+                        this.isAntiAlias = true
+                    }
+                    canvas.nativeCanvas.drawPoints(screenPoints, 0, validPointsCount * 2, paint)
                 }
             }
-            
-            // 使用 nativeCanvas 批量绘制点，大幅提升性能并减少 GPU 命令数量
-            drawIntoCanvas { canvas ->
-                val paint = Paint().apply {
-                    this.color = color.toArgb()
-                    this.strokeWidth = pointSize * 2 // Stroke width is diameter
-                    this.strokeCap = Paint.Cap.ROUND
-                    this.isAntiAlias = true
-                }
-                canvas.nativeCanvas.drawPoints(screenPoints, 0, validPointsCount * 2, paint)
             }
         }
         
@@ -527,12 +645,18 @@ fun StrangeParticleAnimation(
                         Spacer(modifier = Modifier.height(8.dp))
                         
                         // Particle Count Control
-                        Text(text = "Count: $currentParticleCount", color = Color.White)
+                        val countLabel = if (attractor == AttractorType.RIPPLE) {
+                             val progress = ((currentParticleCount - 1000f) / (30000f - 1000f) * 100).toInt()
+                             "Water Level: $progress%"
+                        } else {
+                             "Count: $currentParticleCount"
+                        }
+                        Text(text = countLabel, color = Color.White)
                         Slider(
                             value = currentParticleCount.toFloat(),
                             onValueChange = { currentParticleCount = it.toInt() },
-                            valueRange = 1000f..20000f,
-                            steps = 19
+                            valueRange = 1000f..30000f,
+                            steps = 29
                         )
 
                         Spacer(modifier = Modifier.height(16.dp))
@@ -568,9 +692,11 @@ fun StrangeParticleAnimation(
 }
 
 // 优化后的批量更新函数
-fun updateParticles(data: FloatArray, count: Int, type: AttractorType, dt: Float) {
+fun updateParticles(data: FloatArray, count: Int, type: AttractorType, dt: Float, time: Float = 0f) {
+    val stride = if (type == AttractorType.NEBULA) 6 else 4
+    
     for (i in 0 until count) {
-        val idx = i * 4
+        val idx = i * stride
         val x = data[idx]
         val y = data[idx + 1]
         val z = data[idx + 2]
@@ -623,13 +749,101 @@ fun updateParticles(data: FloatArray, count: Int, type: AttractorType, dt: Float
                 dz = x * speed
             }
             AttractorType.NEBULA -> {
-                // Nebula cloud effect: Particles rotate around the center with noise
-                val dist = kotlin.math.sqrt(x*x + z*z)
-                val angleSpeed = 100f / (dist + 10f) // Slower at outer edges
+                // Nebula Physics: Gravity + Bar + Friction + Turbulence
+                var vx = data[idx + 3]
+                var vy = data[idx + 4]
+                var vz = data[idx + 5]
                 
-                dx = -z * angleSpeed
-                dy = (kotlin.math.sin(dist * 0.1f + x * 0.05f) - y) * 0.5f // Flatten to disk with waves
-                dz = x * angleSpeed
+                // 1. Gravity (Central Black Hole)
+                val distSq = x*x + z*z + 10f // Softening
+                val force = 2000f / (distSq * kotlin.math.sqrt(distSq))
+                vx -= x * force * dt
+                vz -= z * force * dt
+                
+                // 2. Bar Gravity (Rotating Bar)
+                val barAngle = time * 2.0f
+                val barLen = 40f
+                // Two masses at ends of bar
+                val bx1 = kotlin.math.cos(barAngle) * barLen
+                val bz1 = kotlin.math.sin(barAngle) * barLen
+                val bx2 = -bx1
+                val bz2 = -bz1
+                
+                val d1Sq = (x-bx1)*(x-bx1) + (z-bz1)*(z-bz1) + 100f
+                val d2Sq = (x-bx2)*(x-bx2) + (z-bz2)*(z-bz2) + 100f
+                
+                val f1 = 1500f / (d1Sq * kotlin.math.sqrt(d1Sq))
+                val f2 = 1500f / (d2Sq * kotlin.math.sqrt(d2Sq))
+                
+                vx += ((bx1 - x) * f1 + (bx2 - x) * f2) * dt
+                vz += ((bz1 - z) * f1 + (bz2 - z) * f2) * dt
+                
+                // 3. Friction/Damping (Orbit Decay)
+                // Reduced friction to keep particles in orbit longer
+                vx *= 0.9999f
+                vz *= 0.9999f
+                
+                // 4. Update Position
+                var nx = x + vx * dt
+                var nz = z + vz * dt
+                
+                // 5. Turbulence (Peristalsis/Boiling Magma)
+                // Offset getTurbulence(int i, double phase, double t)
+                val phase = 0.0
+                val speed = 2.0
+                val t = time.toDouble()
+                val turbDx = 0.06 * sin(t * speed + phase) + 0.03 * cos(t * speed * 2.3 + i * 0.1)
+                val turbDy = 0.06 * cos(t * speed * 1.5 + phase) + 0.03 * sin(t * speed * 1.9 + i * 0.1)
+                val rotAngle = t * 0.5 * (if (i % 2 == 0) 1.0 else -1.0)
+                
+                // Apply rotation to turbulence
+                val rx = turbDx * cos(rotAngle) - turbDy * sin(rotAngle)
+                val ry = turbDx * sin(rotAngle) + turbDy * cos(rotAngle)
+                
+                // Map 2D turbulence to 3D position (Scale up for visibility)
+                val turbScale = 20.0f
+                nx += rx.toFloat() * turbScale
+                nz += ry.toFloat() * turbScale
+                
+                // 6. Vertical Oscillation (Disk Thickness)
+                var ny = y + vy * dt
+                // Pull back to plane
+                vy -= y * 2.0f * dt
+                vy *= 0.95f // Damping
+                
+                // Update velocity in storage
+                data[idx + 3] = vx
+                data[idx + 4] = vy
+                data[idx + 5] = vz
+                
+                // Respawn if too close or too far
+                val rSq = nx*nx + nz*nz
+                // Increase inner radius to 400 (dist 20) to recycle particles sooner from the center
+                if (rSq < 20f || rSq > 25000f) {
+                     // Respawn at outer rim
+                     val angle = Random.nextFloat() * 6.28f
+                     val dist = 120f + Random.nextFloat() * 30f
+                     nx = kotlin.math.cos(angle) * dist
+                     nz = kotlin.math.sin(angle) * dist
+                     ny = (Random.nextFloat() - 0.5f) * 5f
+                     
+                     // Tangential velocity for new particle
+                     val v = 50f / kotlin.math.sqrt(dist)
+                     data[idx + 3] = -kotlin.math.sin(angle) * v
+                     data[idx + 4] = 0f
+                     data[idx + 5] = kotlin.math.cos(angle) * v
+                }
+                
+                // Write back position (Direct assignment, no dx/dy integration needed here as we did it manually)
+                data[idx] = nx
+                data[idx + 1] = ny
+                data[idx + 2] = nz
+                continue // Skip standard integration
+            }
+            AttractorType.RIPPLE -> {
+                // Water Ripple Physics disabled for Wave Progress Bar
+                // We use canvas drawing instead of particles
+                continue
             }
         }
         
@@ -705,19 +919,22 @@ fun spawnParticle(type: AttractorType, index: Int, total: Int): Particle {
             )
         }
         AttractorType.NEBULA -> {
-            // Spiral galaxy distribution
-            val angle = Random.nextFloat() * 360f
-            val distance = Random.nextFloat() * 100f + 10f // Avoid center
-            val height = (Random.nextFloat() - 0.5f) * 20f
+            // New Physics-based spawn: Randomly in accretion disk
+            val angle = Random.nextFloat() * 6.28f
+            val dist = 40f + Random.nextFloat() * 100f // Broad disk
+            val x = kotlin.math.cos(angle) * dist
+            val z = kotlin.math.sin(angle) * dist
+            val y = (Random.nextFloat() - 0.5f) * 5f // Thin disk
             
-            val rad = angle * (Math.PI / 180f)
-            val x = kotlin.math.cos(rad) * distance
-            val z = kotlin.math.sin(rad) * distance
-            
+            // Note: Velocity is set in the particleData initialization or respawn logic
+            Particle(x.toFloat(), y, z.toFloat(), Color.White)
+        }
+        AttractorType.RIPPLE -> {
+            // Random distribution on a plane
             Particle(
-                x = x.toFloat(),
-                y = height,
-                z = z.toFloat(),
+                x = Random.nextFloat() * 100 - 50,
+                y = 0f,
+                z = Random.nextFloat() * 100 - 50,
                 color = Color.White
             )
         }
