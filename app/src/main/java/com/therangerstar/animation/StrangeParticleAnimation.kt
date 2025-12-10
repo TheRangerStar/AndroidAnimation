@@ -26,6 +26,13 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import android.graphics.BitmapFactory
+import android.graphics.Bitmap
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -232,6 +239,28 @@ fun StrangeParticleAnimation(
     var colorHueOffset by remember { mutableFloatStateOf(Random.nextFloat() * 360f) }
     // Saturation state for particle color
     var colorSaturation by remember { mutableFloatStateOf(0.8f) }
+
+    // Picture Mode State (Fibonacci Sphere only)
+    val context = LocalContext.current
+    var isPictureMode by remember { mutableStateOf(false) }
+    var selectedImageBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    
+    val launcher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            // Load and scale bitmap
+            try {
+                context.contentResolver.openInputStream(it)?.use { stream ->
+                    val original = BitmapFactory.decodeStream(stream)
+                    // Scale down to small sprite size (e.g. 64x64) for performance, but large enough for zoom
+                    selectedImageBitmap = Bitmap.createScaledBitmap(original, 64, 64, true)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
     
     // Apply overrides if provided
     LaunchedEffect(overrideHue, overrideSaturation, overrideSpeed, overrideParticleCount) {
@@ -502,41 +531,78 @@ fun StrangeParticleAnimation(
             }
                 else -> {
                 // Standard Single-Pass Rendering for other attractors
-                for (i in 0 until currentParticleCount) {
-                    val idx = i * 4
-                    val x = particleData[idx]
-                    val y = particleData[idx + 1]
-                    val z = particleData[idx + 2]
-                    
-                    // 1. 旋转变换
-                    val y1 = y * cosX - z * sinX
-                    val z1 = y * sinX + z * cosX
-                    
-                    val x2 = x * cosY + z1 * sinY
-                    val z2 = -x * sinY + z1 * cosY
-                    val y2 = y1
-    
-                    // 2. 投影
-                    val screenX = x2 * scale + centerX
-                    val screenY = y2 * scale + centerY
-                    
-                    // 简单的视锥剔除
-                    if (screenX >= 0 && screenX <= size.width && screenY >= 0 && screenY <= size.height) {
-                        screenPoints[validPointsCount * 2] = screenX
-                        screenPoints[validPointsCount * 2 + 1] = screenY
-                        validPointsCount++
+                // Check if we are in Picture Mode for Fibonacci Sphere
+                if (attractor == AttractorType.FIBONACCI_SPHERE && isPictureMode && selectedImageBitmap != null) {
+                    val bitmap = selectedImageBitmap!!
+                    drawIntoCanvas { canvas -> 
+                         val paint = Paint()
+                         // Scale bitmap draw size based on userScale, clamped to avoid becoming too huge or too tiny
+                         // Base size is 64x64. At userScale=1.0, we draw at 32x32 to keep it crisp.
+                         // As userScale increases, we increase draw size.
+                         val drawSize = (32f * userScale).coerceIn(10f, 256f)
+                         val halfSize = drawSize / 2f
+                         val dstRect = android.graphics.RectF()
+                         
+                         for (i in 0 until currentParticleCount) {
+                             val idx = i * 4
+                             val x = particleData[idx]
+                             val y = particleData[idx + 1]
+                             val z = particleData[idx + 2]
+                             
+                             // Rotate & Project
+                             val y1 = y * cosX - z * sinX
+                             val z1 = y * sinX + z * cosX
+                             val x2 = x * cosY + z1 * sinY
+                             val z2 = -x * sinY + z1 * cosY
+                             val y2 = y1
+                             val screenX = x2 * scale + centerX
+                             val screenY = y2 * scale + centerY
+                             
+                             if (screenX >= 0 && screenX <= size.width && screenY >= 0 && screenY <= size.height) {
+                                 // Draw bitmap centered with scaled size
+                                 dstRect.set(screenX - halfSize, screenY - halfSize, screenX + halfSize, screenY + halfSize)
+                                 canvas.nativeCanvas.drawBitmap(bitmap, null, dstRect, paint)
+                             }
+                         }
                     }
-                }
-                
-                // 使用 nativeCanvas 批量绘制点，大幅提升性能并减少 GPU 命令数量
-                drawIntoCanvas { canvas ->
-                    val paint = Paint().apply {
-                        this.color = color.toArgb()
-                        this.strokeWidth = pointSize * 2 // Stroke width is diameter
-                        this.strokeCap = Paint.Cap.ROUND
-                        this.isAntiAlias = true
+                } else {
+                    // Standard Dot Rendering
+                    for (i in 0 until currentParticleCount) {
+                        val idx = i * 4
+                        val x = particleData[idx]
+                        val y = particleData[idx + 1]
+                        val z = particleData[idx + 2]
+                        
+                        // 1. 旋转变换
+                        val y1 = y * cosX - z * sinX
+                        val z1 = y * sinX + z * cosX
+                        
+                        val x2 = x * cosY + z1 * sinY
+                        val z2 = -x * sinY + z1 * cosY
+                        val y2 = y1
+        
+                        // 2. 投影
+                        val screenX = x2 * scale + centerX
+                        val screenY = y2 * scale + centerY
+                        
+                        // 简单的视锥剔除
+                        if (screenX >= 0 && screenX <= size.width && screenY >= 0 && screenY <= size.height) {
+                            screenPoints[validPointsCount * 2] = screenX
+                            screenPoints[validPointsCount * 2 + 1] = screenY
+                            validPointsCount++
+                        }
                     }
-                    canvas.nativeCanvas.drawPoints(screenPoints, 0, validPointsCount * 2, paint)
+                    
+                    // 使用 nativeCanvas 批量绘制点，大幅提升性能并减少 GPU 命令数量
+                    drawIntoCanvas { canvas ->
+                        val paint = Paint().apply {
+                            this.color = color.toArgb()
+                            this.strokeWidth = pointSize * 2 // Stroke width is diameter
+                            this.strokeCap = Paint.Cap.ROUND
+                            this.isAntiAlias = true
+                        }
+                        canvas.nativeCanvas.drawPoints(screenPoints, 0, validPointsCount * 2, paint)
+                    }
                 }
             }
             }
@@ -662,19 +728,44 @@ fun StrangeParticleAnimation(
                         Spacer(modifier = Modifier.height(16.dp))
 
                         // 颜色偏移控制 (Color Wheel)
-                        Text(text = "Particle Color", color = Color.White, modifier = Modifier.padding(bottom = 8.dp))
+                        if (attractor == AttractorType.FIBONACCI_SPHERE) {
+                             Row(
+                                 modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                                 horizontalArrangement = Arrangement.SpaceBetween,
+                                 verticalAlignment = Alignment.CenterVertically
+                             ) {
+                                 Text("Picture Mode", color = Color.White)
+                                 Switch(
+                                     checked = isPictureMode,
+                                     onCheckedChange = { isPictureMode = it }
+                                 )
+                             }
+                             
+                             if (isPictureMode) {
+                                 Button(
+                                     onClick = { launcher.launch("image/*") },
+                                     modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)
+                                 ) {
+                                     Text(if (selectedImageBitmap == null) "Select Image" else "Change Image")
+                                 }
+                             }
+                        }
+
+                        if (!isPictureMode) {
+                            Text(text = "Particle Color", color = Color.White, modifier = Modifier.padding(bottom = 8.dp))
                         
-                        ColorWheel(
-                            initialHue = colorHueOffset,
-                            initialSaturation = colorSaturation,
-                            onColorSelected = { hue, saturation -> 
-                                colorHueOffset = hue
-                                colorSaturation = saturation
-                            },
-                            onColorConfirmed = { hue, saturation ->
-                                onSaveColor(hue, saturation)
-                            }
-                        )
+                            ColorWheel(
+                                initialHue = colorHueOffset,
+                                initialSaturation = colorSaturation,
+                                onColorSelected = { hue, saturation -> 
+                                    colorHueOffset = hue
+                                    colorSaturation = saturation
+                                },
+                                onColorConfirmed = { hue, saturation ->
+                                    onSaveColor(hue, saturation)
+                                }
+                            )
+                        }
                         
                         Spacer(modifier = Modifier.height(16.dp))
                         

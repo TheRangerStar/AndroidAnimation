@@ -30,6 +30,8 @@
     *   Sprott 收集的简单混沌系统之一。
 5.  **Fibonacci Sphere (斐波那契球体)**
     *   基于斐波那契格点的均匀球面分布，展现数学的和谐之美。
+    *   **新特性 - 图片模式 (Picture Mode)**: 支持自定义上传图片，将球面上的每个粒子点替换为用户选择的图片。
+    *   **动态缩放**: 图片绘制大小随手势缩放比例动态调整，放大可查看图片细节，带来独特的视觉冲击。
 6.  **Nebula Cloud (星云)**
     *   **新特性**: 模拟宇宙星系的螺旋结构。
     *   采用 **加性混合 (Additive Blending)** 渲染技术，模拟恒星核心的炽热发光效果。
@@ -44,7 +46,7 @@
 *   **语言**: Kotlin
 *   **UI 框架**: Jetpack Compose
 *   **图形绘制**: 
-    *   Android Canvas API (Native Canvas drawPoints)
+    *   Android Canvas API (Native Canvas drawPoints / drawBitmap)
     *   Path API (Cubic Bezier / Sine Waves)
     *   PorterDuff Xfermode (Blend Modes)
 *   **架构**: MVVM (Model-View-ViewModel)
