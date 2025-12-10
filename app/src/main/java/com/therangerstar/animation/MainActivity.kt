@@ -7,7 +7,6 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.Scaffold
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
@@ -17,6 +16,7 @@ import androidx.navigation3.ui.NavDisplay
 import com.therangerstar.animation.data.AppDatabase
 import com.therangerstar.animation.ui.theme.RangerTestTheme
 import kotlinx.serialization.Serializable
+import androidx.lifecycle.ViewModelProvider
 
 @Serializable
 object Home
@@ -30,6 +30,8 @@ class MainActivity : ComponentActivity() {
         
         val database = AppDatabase.getDatabase(applicationContext)
         val dao = database.attractorDao()
+        val factory = AttractorViewModelFactory(dao)
+        val viewModel = ViewModelProvider(this, factory)[AttractorViewModel::class.java]
         
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
@@ -50,34 +52,27 @@ class MainActivity : ComponentActivity() {
                     backStack = backStack,
                     entryProvider = entryProvider {
                         entry<Home> {
-                            HomeScreen(
-                                dao = dao,
-                                onAttractorSelected = { attractor ->
-                                    backStack.add(Detail(attractor.name))
-                                }
-                            )
-                        }
-                        
-                        entry<Detail> { detail ->
-                            val attractor = AttractorType.valueOf(detail.attractorName)
-                            
-                            Scaffold(
-                                modifier = Modifier.fillMaxSize(),
-                                containerColor = androidx.compose.ui.graphics.Color.Black
-                            ) { innerPadding ->
-                                StrangeParticleAnimation(
-                                    attractor = attractor,
-                                    contentPadding = innerPadding,
-                                    isInteractive = true,
-                                    dao = dao,
-                                    onBack = { 
-                                        if (backStack.isNotEmpty()) {
-                                            backStack.removeAt(backStack.lastIndex) 
-                                        }
-                                    }
-                                )
+                        HomePage(
+                            viewModel = viewModel,
+                            onAttractorSelected = { attractor ->
+                                backStack.add(Detail(attractor.name))
                             }
-                        }
+                        )
+                    }
+                    
+                    entry<Detail> { detail ->
+                        val attractor = AttractorType.valueOf(detail.attractorName)
+                        
+                        AnimationDetailPage(
+                            viewModel = viewModel,
+                            initialAttractor = attractor,
+                            onBack = { 
+                                if (backStack.isNotEmpty()) {
+                                    backStack.removeAt(backStack.lastIndex) 
+                                }
+                            }
+                        )
+                    }
                     }
                 )
             }

@@ -1,5 +1,6 @@
 package com.therangerstar.animation
 
+import android.graphics.Paint
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -33,6 +34,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -40,6 +42,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontWeight
@@ -47,11 +52,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import androidx.compose.runtime.rememberCoroutineScope
-import com.therangerstar.animation.data.AttractorDao
-import com.therangerstar.animation.data.AttractorSetting
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
@@ -70,21 +71,26 @@ enum class AttractorType(val title: String) {
     LORENZ("Lorenz Attractor"),
     AIZAWA("Aizawa Attractor"),
     HALVORSEN("Halvorsen Attractor"),
-    SPROTT_B("Sprott B Attractor")
+    SPROTT_B("Sprott B Attractor"),
+    FIBONACCI_SPHERE("Fibonacci Sphere"),
+    NEBULA("Nebula Cloud")
 }
 
 @Composable
 fun ColorWheel(
     modifier: Modifier = Modifier,
     initialHue: Float = 0f,
-    onHueSelected: (Float) -> Unit,
-    onHueConfirmed: (Float) -> Unit = {}
+    initialSaturation: Float = 1f,
+    onColorSelected: (Float, Float) -> Unit,
+    onColorConfirmed: (Float, Float) -> Unit = { _, _ -> }
 ) {
     var selectedHue by remember { mutableFloatStateOf(initialHue) }
+    var selectedSaturation by remember { mutableFloatStateOf(initialSaturation) }
     
-    // Update selectedHue when initialHue changes (e.g. loaded from DB)
-    LaunchedEffect(initialHue) {
+    // Update state when initials change (e.g. loaded from DB)
+    LaunchedEffect(initialHue, initialSaturation) {
         selectedHue = initialHue
+        selectedSaturation = initialSaturation
     }
     
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -93,7 +99,7 @@ fun ColorWheel(
             modifier = Modifier
                 .size(40.dp)
                 .background(
-                    color = hsvToColor(selectedHue, 1f, 1f),
+                    color = hsvToColor(selectedHue, selectedSaturation, 1f),
                     shape = androidx.compose.foundation.shape.CircleShape
                 )
                 .padding(bottom = 8.dp)
@@ -106,17 +112,23 @@ fun ColorWheel(
                 .size(200.dp)
                 .pointerInput(Unit) {
                     detectDragGestures(
-                        onDragEnd = { onHueConfirmed(selectedHue) }
+                        onDragEnd = { onColorConfirmed(selectedHue, selectedSaturation) }
                     ) { change, _ ->
                         val center = Offset(size.width / 2f, size.height / 2f)
                         val delta = change.position - center
+                        val radius = size.width / 2f
                         
                         // 计算 Hue (角度)
                         val angle = atan2(delta.y, delta.x) * (180 / Math.PI.toFloat())
                         val hue = (angle + 360) % 360
                         
+                        // Calculate Saturation (Distance from center)
+                        val distance = kotlin.math.sqrt(delta.x * delta.x + delta.y * delta.y)
+                        val saturation = (distance / radius).coerceIn(0f, 1f)
+
                         selectedHue = hue
-                        onHueSelected(hue)
+                        selectedSaturation = saturation
+                        onColorSelected(hue, saturation)
                     }
                 }
         ) {
@@ -124,7 +136,12 @@ fun ColorWheel(
                 val center = Offset(size.width / 2f, size.height / 2f)
                 val radius = size.width / 2f
                 
-                // 1. 绘制色相环 (Hue)
+                // 1. 绘制色相环 (Hue) + Saturation Gradient
+                // We draw a sweep gradient for Hue, and override with a radial gradient for saturation
+                // But a simple ColorWheel usually just changes hue.
+                // To support "inner colors", we usually mix white in the center.
+                
+                // Draw Hue Sweep
                 val sweepGradient = Brush.sweepGradient(
                     colors = listOf(
                         Color.Red, Color.Magenta, Color.Blue, Color.Cyan,
@@ -139,10 +156,22 @@ fun ColorWheel(
                     center = center
                 )
                 
+                // Draw Saturation Radial Gradient (White at center -> Transparent at edge)
+                val radialGradient = Brush.radialGradient(
+                    colors = listOf(Color.White, Color.Transparent),
+                    center = center,
+                    radius = radius
+                )
+                 drawCircle(
+                    brush = radialGradient,
+                    radius = radius,
+                    center = center
+                )
+                
                 // 3. 绘制选择器指示器
                 val angleRad = selectedHue * (Math.PI / 180)
-                // 固定在边缘内侧一点
-                val selectorDist = radius * 0.8f
+                // Distance based on saturation
+                val selectorDist = radius * selectedSaturation
                 val selectorX = center.x + selectorDist * cos(angleRad).toFloat()
                 val selectorY = center.y + selectorDist * sin(angleRad).toFloat()
                 
@@ -155,7 +184,7 @@ fun ColorWheel(
                 )
                 // 指示器内圈 (当前颜色)
                 drawCircle(
-                    color = hsvToColor(selectedHue, 1f, 1f),
+                    color = hsvToColor(selectedHue, selectedSaturation, 1f),
                     radius = 8.dp.toPx(),
                     center = Offset(selectorX, selectorY)
                 )
@@ -171,58 +200,76 @@ fun StrangeParticleAnimation(
     contentPadding: PaddingValues = PaddingValues(0.dp),
     isInteractive: Boolean = true,
     particleCount: Int = 8000,
-    dao: AttractorDao? = null,
     onBack: () -> Unit = {},
-    overrideHue: Float? = null
+    overrideHue: Float? = null,
+    overrideSaturation: Float? = null,
+    overrideSpeed: Float? = null,
+    overrideParticleCount: Int? = null,
+    onSaveColor: (Float, Float) -> Unit = { _, _ -> },
+    onSaveSettings: (Float, Float, Float, Int) -> Unit = { _, _, _, _ -> }
 ) {
     // 状态管理
     var size by remember { mutableStateOf(IntSize.Zero) }
     val scope = rememberCoroutineScope()
     
     // 旋转角度 (X轴和Y轴旋转)
-    var rotationX by remember { mutableStateOf(0f) }
-    var rotationY by remember { mutableStateOf(0f) }
+    var rotationX by remember { mutableFloatStateOf(0f) }
+    var rotationY by remember { mutableFloatStateOf(0f) }
     
     // 缩放比例 (用户手势控制)
-    var userScale by remember { mutableStateOf(1f) }
+    var userScale by remember { mutableFloatStateOf(1f) }
 
     // 自定义设置
     var showSettings by remember { mutableStateOf(false) }
     var particleSize by remember { mutableFloatStateOf(2f) }
+    
+    // Settings state
+    var speedMultiplier by remember { mutableFloatStateOf(1.0f) }
+    var currentParticleCount by remember { mutableStateOf(particleCount) }
+    
     // 初始化时颜色随机，只在首次组合时生成
     var colorHueOffset by remember { mutableFloatStateOf(Random.nextFloat() * 360f) }
+    // Saturation state for particle color
+    var colorSaturation by remember { mutableFloatStateOf(0.8f) }
     
-    // 如果有外部传入的 overrideHue，则使用外部传入的值
-    // 使用 LaunchedEffect 确保只在 overrideHue 变化时更新
-    LaunchedEffect(overrideHue) {
+    // Apply overrides if provided
+    LaunchedEffect(overrideHue, overrideSaturation, overrideSpeed, overrideParticleCount) {
         if (overrideHue != null) {
             colorHueOffset = overrideHue
         }
-    }
-    
-    // 从数据库加载颜色设置
-    LaunchedEffect(attractor) {
-        if (dao != null) {
-            val setting = dao.getSettingSync(attractor.name)
-            if (setting != null) {
-                colorHueOffset = setting.hue
-            }
+        if (overrideSaturation != null) {
+            colorSaturation = overrideSaturation
+        }
+        if (overrideSpeed != null) {
+            speedMultiplier = overrideSpeed
+        }
+        if (overrideParticleCount != null) {
+            currentParticleCount = overrideParticleCount
         }
     }
     
     // 粒子列表
-    // 使用 remember(attractor) 确保切换时重新初始化
-    val particles = remember(attractor, particleCount) {
-        Array(particleCount) {
-            spawnParticle(attractor)
+    // 使用 remember(attractor, currentParticleCount) 确保切换时重新初始化
+    // 优化：使用 FloatArray 而不是 Array<Particle> 对象，减少对象开销
+    val particleData = remember(attractor, currentParticleCount) {
+        val data = FloatArray(currentParticleCount * 4) // x, y, z, unused
+        for (i in 0 until currentParticleCount) {
+            val p = spawnParticle(attractor, i, currentParticleCount)
+            data[i * 4] = p.x
+            data[i * 4 + 1] = p.y
+            data[i * 4 + 2] = p.z
         }
+        data
     }
+    
+    // 屏幕坐标缓存，避免每帧分配
+    val screenPoints = remember(currentParticleCount) { FloatArray(currentParticleCount * 2) }
     
     // 动画帧触发器
     var trigger by remember { mutableStateOf(0L) }
     
     // 动画循环
-    LaunchedEffect(particles) {
+    LaunchedEffect(particleData, speedMultiplier) {
         while (isActive) {
             withFrameNanos { 
                 trigger = it
@@ -230,24 +277,12 @@ fun StrangeParticleAnimation(
             
             // 更新粒子位置
             // Halvorsen 吸引子对时间步长非常敏感，需要较小的 dt
-            val dt = if (attractor == AttractorType.HALVORSEN) 0.005f else 0.015f
+            // 应用速度倍率
+            val baseDt = if (attractor == AttractorType.HALVORSEN) 0.005f else 0.015f
+            val dt = baseDt * speedMultiplier
             
-            for (p in particles) {
-                updateParticle(p, attractor, dt)
-                
-                // 边界检查：防止粒子逃逸到无穷远或产生 NaN
-                if (p.x.isNaN() || p.y.isNaN() || p.z.isNaN() || 
-                    kotlin.math.abs(p.x) > 1000f || 
-                    kotlin.math.abs(p.y) > 1000f || 
-                    kotlin.math.abs(p.z) > 1000f) {
-                    
-                    // 重置粒子
-                    val newP = spawnParticle(attractor)
-                    p.x = newP.x
-                    p.y = newP.y
-                    p.z = newP.z
-                }
-            }
+            // 批量更新，避免对象创建
+            updateParticles(particleData, currentParticleCount, attractor, dt)
         }
     }
 
@@ -311,7 +346,6 @@ fun StrangeParticleAnimation(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color.Black)
             .onSizeChanged { size = it }
             .then(gesturesModifier)
     ) {
@@ -327,7 +361,9 @@ fun StrangeParticleAnimation(
                 AttractorType.LORENZ -> 12f
                 AttractorType.AIZAWA -> 180f
                 AttractorType.HALVORSEN -> 15f
-                AttractorType.SPROTT_B -> 60f 
+                AttractorType.SPROTT_B -> 60f
+                AttractorType.FIBONACCI_SPHERE -> 2.5f
+                AttractorType.NEBULA -> 2.0f
             }
             
             // 最终缩放
@@ -338,12 +374,21 @@ fun StrangeParticleAnimation(
             val cosY = cos(rotationY)
             val sinY = sin(rotationY)
             
-            particles.forEach { p ->
-                // 1. 旋转变换
-                val x = p.x
-                val y = p.y
-                val z = p.z
+            // 3. 颜色
+            // 使用统一的颜色，基于用户选择的 hue 和 saturation
+            val color = hsvToColor(colorHueOffset, colorSaturation, 1f, 0.7f)
+            
+            // 优化：直接在 Canvas 循环中处理变换，不创建中间对象
+            var validPointsCount = 0
+            val pointSize = if(attractor == AttractorType.AIZAWA) particleSize * 0.75f else particleSize
+            
+            for (i in 0 until currentParticleCount) {
+                val idx = i * 4
+                val x = particleData[idx]
+                val y = particleData[idx + 1]
+                val z = particleData[idx + 2]
                 
+                // 1. 旋转变换
                 val y1 = y * cosX - z * sinX
                 val z1 = y * sinX + z * cosX
                 
@@ -354,20 +399,28 @@ fun StrangeParticleAnimation(
                 // 2. 投影
                 val focalLength = 1000f
                 val depth = z2 + 100f 
-                val perspective = if (depth > 0) focalLength / (focalLength + z2) else 1f
+                // val perspective = if (depth > 0) focalLength / (focalLength + z2) else 1f
                 
                 val screenX = x2 * scale + centerX
                 val screenY = y2 * scale + centerY
                 
-                // 3. 颜色
-                // 使用统一的颜色，基于用户选择的 hue
-                val color = hsvToColor(colorHueOffset, 0.8f, 1f, 0.7f)
-
-                drawCircle(
-                    color = color,
-                    radius = if(attractor == AttractorType.AIZAWA) particleSize * 0.75f else particleSize,
-                    center = Offset(screenX, screenY)
-                )
+                // 简单的视锥剔除
+                if (screenX >= 0 && screenX <= size.width && screenY >= 0 && screenY <= size.height) {
+                    screenPoints[validPointsCount * 2] = screenX
+                    screenPoints[validPointsCount * 2 + 1] = screenY
+                    validPointsCount++
+                }
+            }
+            
+            // 使用 nativeCanvas 批量绘制点，大幅提升性能并减少 GPU 命令数量
+            drawIntoCanvas { canvas ->
+                val paint = Paint().apply {
+                    this.color = color.toArgb()
+                    this.strokeWidth = pointSize * 2 // Stroke width is diameter
+                    this.strokeCap = Paint.Cap.ROUND
+                    this.isAntiAlias = true
+                }
+                canvas.nativeCanvas.drawPoints(screenPoints, 0, validPointsCount * 2, paint)
             }
         }
         
@@ -459,6 +512,28 @@ fun StrangeParticleAnimation(
                             valueRange = 0.5f..5f,
                             steps = 9
                         )
+                        
+                        Spacer(modifier = Modifier.height(8.dp))
+                        
+                        // 粒子速度控制
+                        Text(text = "Speed: ${String.format("%.1fx", speedMultiplier)}", color = Color.White)
+                        Slider(
+                            value = speedMultiplier,
+                            onValueChange = { speedMultiplier = it },
+                            valueRange = 0.1f..3.0f,
+                            steps = 29
+                        )
+                        
+                        Spacer(modifier = Modifier.height(8.dp))
+                        
+                        // Particle Count Control
+                        Text(text = "Count: $currentParticleCount", color = Color.White)
+                        Slider(
+                            value = currentParticleCount.toFloat(),
+                            onValueChange = { currentParticleCount = it.toInt() },
+                            valueRange = 1000f..20000f,
+                            steps = 19
+                        )
 
                         Spacer(modifier = Modifier.height(16.dp))
 
@@ -467,18 +542,23 @@ fun StrangeParticleAnimation(
                         
                         ColorWheel(
                             initialHue = colorHueOffset,
-                            onHueSelected = { colorHueOffset = it },
-                            onHueConfirmed = { hue ->
-                                scope.launch {
-                                    dao?.insert(AttractorSetting(attractor.name, hue))
-                                }
+                            initialSaturation = colorSaturation,
+                            onColorSelected = { hue, saturation -> 
+                                colorHueOffset = hue
+                                colorSaturation = saturation
+                            },
+                            onColorConfirmed = { hue, saturation ->
+                                onSaveColor(hue, saturation)
                             }
                         )
                         
                         Spacer(modifier = Modifier.height(16.dp))
                         
-                        Button(onClick = { showSettings = false }) {
-                            Text("Close")
+                        Button(onClick = { 
+                            showSettings = false 
+                            onSaveSettings(colorHueOffset, colorSaturation, speedMultiplier, currentParticleCount)
+                        }) {
+                            Text("Save & Close")
                         }
                     }
                 }
@@ -487,8 +567,97 @@ fun StrangeParticleAnimation(
     }
 }
 
+// 优化后的批量更新函数
+fun updateParticles(data: FloatArray, count: Int, type: AttractorType, dt: Float) {
+    for (i in 0 until count) {
+        val idx = i * 4
+        val x = data[idx]
+        val y = data[idx + 1]
+        val z = data[idx + 2]
+        
+        var dx = 0f
+        var dy = 0f
+        var dz = 0f
+        
+        when(type) {
+            AttractorType.LORENZ -> {
+                val sigma = 10.0f
+                val rho = 28.0f
+                val beta = 8.0f / 3.0f
+                dx = sigma * (y - x)
+                dy = x * (rho - z) - y
+                dz = x * y - beta * z
+            }
+            AttractorType.AIZAWA -> {
+                val a = 0.95f
+                val b = 0.7f
+                val c = 0.6f
+                val d = 3.5f
+                val e = 0.25f
+                val f = 0.1f
+                
+                dx = (z - b) * x - d * y
+                dy = d * x + (z - b) * y
+                dz = c + a * z - (z * z * z) / 3f - (x * x + y * y) * (1f + e * z) + f * z * x * x * x
+            }
+            AttractorType.HALVORSEN -> {
+                val a = 1.4f 
+                dx = -a * x - 4 * y - 4 * z - y * y
+                dy = -a * y - 4 * z - 4 * x - z * z
+                dz = -a * z - 4 * x - 4 * y - x * x
+            }
+            AttractorType.SPROTT_B -> {
+                val a = 0.4f
+                val b = 1.2f
+                dx = a * y * z
+                dy = x - y
+                dz = b - x * y
+            }
+            AttractorType.FIBONACCI_SPHERE -> {
+                // Fibonacci Sphere is a static shape usually, but we can make it rotate
+                // or have a flow on the surface.
+                // For now, let's just make it rotate slowly around Y axis
+                val speed = 0.5f // Intrinsic rotation speed
+                dx = -z * speed
+                dy = 0f
+                dz = x * speed
+            }
+            AttractorType.NEBULA -> {
+                // Nebula cloud effect: Particles rotate around the center with noise
+                val dist = kotlin.math.sqrt(x*x + z*z)
+                val angleSpeed = 100f / (dist + 10f) // Slower at outer edges
+                
+                dx = -z * angleSpeed
+                dy = (kotlin.math.sin(dist * 0.1f + x * 0.05f) - y) * 0.5f // Flatten to disk with waves
+                dz = x * angleSpeed
+            }
+        }
+        
+        var nx = x + dx * dt
+        var ny = y + dy * dt
+        var nz = z + dz * dt
+        
+        // 边界检查
+        if (nx.isNaN() || ny.isNaN() || nz.isNaN() || 
+            kotlin.math.abs(nx) > 1000f || 
+            kotlin.math.abs(ny) > 1000f || 
+            kotlin.math.abs(nz) > 1000f) {
+            
+            // Respawn logic (simplified for FloatArray)
+            val p = spawnParticle(type, i, count)
+            nx = p.x
+            ny = p.y
+            nz = p.z
+        }
+        
+        data[idx] = nx
+        data[idx + 1] = ny
+        data[idx + 2] = nz
+    }
+}
+
 // 辅助函数：生成初始粒子
-fun spawnParticle(type: AttractorType): Particle {
+fun spawnParticle(type: AttractorType, index: Int, total: Int): Particle {
     return when(type) {
         AttractorType.LORENZ -> Particle(
             x = Random.nextFloat() * 20 - 10,
@@ -503,10 +672,10 @@ fun spawnParticle(type: AttractorType): Particle {
             color = Color.White
         )
         AttractorType.HALVORSEN -> Particle(
-            x = Random.nextFloat() * 10 - 5,
-            y = Random.nextFloat() * 10 - 5,
-            z = Random.nextFloat() * 10 - 5,
-            color = Color.White
+             x = Random.nextFloat() * 4 - 2,
+             y = Random.nextFloat() * 4 - 2,
+             z = Random.nextFloat() * 4 - 2,
+             color = Color.White
         )
         AttractorType.SPROTT_B -> Particle(
             x = Random.nextFloat() * 2 - 1,
@@ -514,55 +683,48 @@ fun spawnParticle(type: AttractorType): Particle {
             z = Random.nextFloat() * 2 - 1,
             color = Color.White
         )
+        AttractorType.FIBONACCI_SPHERE -> {
+            val samples = total
+            val phi = Math.PI * (3.0 - kotlin.math.sqrt(5.0)) // golden angle in radians
+
+            val y = 1 - (index / (samples - 1).toFloat()) * 2  // y goes from 1 to -1
+            val radius = kotlin.math.sqrt(1 - y * y)  // radius at y
+
+            val theta = phi * index  // golden angle increment
+
+            val x = kotlin.math.cos(theta) * radius
+            val z = kotlin.math.sin(theta) * radius
+
+            val scale = 150f // Scale up for visibility
+            
+            Particle(
+                x = x.toFloat() * scale,
+                y = y * scale,
+                z = z.toFloat() * scale,
+                color = Color.White
+            )
+        }
+        AttractorType.NEBULA -> {
+            // Spiral galaxy distribution
+            val angle = Random.nextFloat() * 360f
+            val distance = Random.nextFloat() * 100f + 10f // Avoid center
+            val height = (Random.nextFloat() - 0.5f) * 20f
+            
+            val rad = angle * (Math.PI / 180f)
+            val x = kotlin.math.cos(rad) * distance
+            val z = kotlin.math.sin(rad) * distance
+            
+            Particle(
+                x = x.toFloat(),
+                y = height,
+                z = z.toFloat(),
+                color = Color.White
+            )
+        }
     }
 }
 
-// 辅助函数：更新粒子位置
-fun updateParticle(p: Particle, type: AttractorType, dt: Float) {
-    var dx = 0f
-    var dy = 0f
-    var dz = 0f
-    
-    when(type) {
-        AttractorType.LORENZ -> {
-            val sigma = 10.0f
-            val rho = 28.0f
-            val beta = 8.0f / 3.0f
-            dx = sigma * (p.y - p.x)
-            dy = p.x * (rho - p.z) - p.y
-            dz = p.x * p.y - beta * p.z
-        }
-        AttractorType.AIZAWA -> {
-            val a = 0.95f
-            val b = 0.7f
-            val c = 0.6f
-            val d = 3.5f
-            val e = 0.25f
-            val f = 0.1f
-            
-            dx = (p.z - b) * p.x - d * p.y
-            dy = d * p.x + (p.z - b) * p.y
-            dz = c + a * p.z - (p.z * p.z * p.z) / 3f - (p.x * p.x + p.y * p.y) * (1f + e * p.z) + f * p.z * p.x * p.x * p.x
-        }
-        AttractorType.HALVORSEN -> {
-            val a = 1.4f // 经典值约 1.4 - 1.89
-            dx = -a * p.x - 4 * p.y - 4 * p.z - p.y * p.y
-            dy = -a * p.y - 4 * p.z - 4 * p.x - p.z * p.z
-            dz = -a * p.z - 4 * p.x - 4 * p.y - p.x * p.x
-        }
-        AttractorType.SPROTT_B -> {
-            val a = 0.4f
-            val b = 1.2f
-            dx = a * p.y * p.z
-            dy = p.x - p.y
-            dz = b - p.x * p.y
-        }
-    }
-    
-    p.x += dx * dt
-    p.y += dy * dt
-    p.z += dz * dt
-}
+// 辅助函数：更新粒子位置 (已废弃，使用批量更新函数 updateParticles)
 
 // 简单的 HSV 转 Color
 fun hsvToColor(hue: Float, saturation: Float, value: Float, alpha: Float = 1f): Color {

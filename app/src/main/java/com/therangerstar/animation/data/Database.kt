@@ -13,7 +13,10 @@ import kotlinx.coroutines.flow.Flow
 @Entity(tableName = "attractor_settings")
 data class AttractorSetting(
     @PrimaryKey val attractorName: String,
-    val hue: Float
+    val hue: Float,
+    val saturation: Float = 1.0f, // Default saturation
+    val speed: Float = 1.0f, // Default speed
+    val particleCount: Int = 8000 // Default particle count
 )
 
 @Dao
@@ -31,7 +34,7 @@ interface AttractorDao {
     suspend fun insert(setting: AttractorSetting)
 }
 
-@Database(entities = [AttractorSetting::class], version = 1)
+@Database(entities = [AttractorSetting::class], version = 3)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun attractorDao(): AttractorDao
 
@@ -45,7 +48,9 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "app_database"
-                ).build()
+                )
+                .fallbackToDestructiveMigration()
+                .build()
                 INSTANCE = instance
                 instance
             }

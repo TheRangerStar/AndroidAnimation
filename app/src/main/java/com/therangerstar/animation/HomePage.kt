@@ -23,20 +23,24 @@ import coil.ImageLoader
 import coil.decode.GifDecoder
 import androidx.compose.ui.platform.LocalContext
 import android.os.Build
+import androidx.compose.runtime.LaunchedEffect
 import coil.decode.ImageDecoderDecoder
 import androidx.compose.ui.tooling.preview.Preview
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import com.therangerstar.animation.ui.theme.RangerTestTheme
+import kotlin.random.Random
+import androidx.compose.runtime.remember
 
 @Composable
-fun HomeScreen(
-    dao: AttractorDao,
+fun HomePage(
+    viewModel: AttractorViewModel,
     onAttractorSelected: (AttractorType) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val settings by dao.getAllSettings().collectAsState(initial = emptyList())
-    val settingsMap = settings.associate { it.attractorName to it.hue }
+    val settingsMap by viewModel.settings.collectAsState()
+    
+    // No explicit initialization logic here; handled by ViewModel init block
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -85,50 +89,25 @@ fun HomeScreen(
                 )
 
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
+                    columns = GridCells.Fixed(1),
                     contentPadding = PaddingValues(16.dp),
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                     modifier = Modifier.weight(1f)
                 ) {
                     items(AttractorType.values()) { attractor ->
-                        val hue = settingsMap[attractor.name]
-                        AttractorCard(
-                            attractor = attractor, 
-                            hue = hue,
-                            onClick = { onAttractorSelected(attractor) }
-                        )
-                    }
+                    val hue = settingsMap[attractor.name]?.hue
+                    val saturation = settingsMap[attractor.name]?.saturation
+                    AttractorCard(
+                        attractor = attractor, 
+                        hue = hue,
+                        saturation = saturation,
+                        onClick = { onAttractorSelected(attractor) }
+                    )
+                }
                 }
             }
         }
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun HomeScreenPreview() {
-    RangerTestTheme {
-        HomeScreen(
-            dao = object : AttractorDao {
-                override fun getSetting(name: String): Flow<AttractorSetting?> {
-                    return flowOf(null)
-                }
-
-                override suspend fun getSettingSync(name: String): AttractorSetting? {
-                    return null
-                }
-
-                override fun getAllSettings(): Flow<List<AttractorSetting>> {
-                    return flowOf(emptyList())
-                }
-
-                override suspend fun insert(setting: AttractorSetting) {
-                    // No-op
-                }
-            },
-            onAttractorSelected = {}
-        )
     }
 }
 
@@ -140,6 +119,7 @@ fun AttractorCardPreview() {
             AttractorCard(
                 attractor = AttractorType.LORENZ,
                 hue = 120f,
+                saturation = 0.8f,
                 onClick = {}
             )
         }
@@ -149,6 +129,7 @@ fun AttractorCardPreview() {
 fun AttractorCard(
     attractor: AttractorType,
     hue: Float?,
+    saturation: Float?,
     onClick: () -> Unit
 ) {
     Card(
@@ -156,8 +137,8 @@ fun AttractorCard(
             .fillMaxWidth()
             .aspectRatio(1f)
             .clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             // Preview Animation (Non-interactive, fewer particles)
@@ -166,7 +147,8 @@ fun AttractorCard(
                 isInteractive = false,
                 particleCount = 2000, // Lightweight but visible
                 modifier = Modifier.fillMaxSize(),
-                overrideHue = hue
+                overrideHue = hue,
+                overrideSaturation = saturation
             )
             
             // Overlay gradient for text readability
@@ -175,7 +157,7 @@ fun AttractorCard(
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .height(40.dp)
-                    .background(Color.Black.copy(alpha = 0.6f))
+                    .background(Color.Transparent)
             )
 
             // Label
