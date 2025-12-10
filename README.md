@@ -1,4 +1,4 @@
-# The Ranger Star Animation
+# TheRangerStar Animation
 
 一个基于 Android Jetpack Compose 开发的高性能粒子动画展示应用，探索数学之美与混沌理论的视觉呈现。
 
